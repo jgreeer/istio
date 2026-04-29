@@ -77,6 +77,17 @@ func SettingsFromCommandLine(testID string) (*Settings, error) {
 	}
 	s.IPFamilies = normalizedIPFamilies
 
+	normalizedConformanceTests := make(ArrayFlags, 0)
+	for _, t := range s.GatewayConformanceTests {
+		for _, name := range strings.Split(t, ",") {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				normalizedConformanceTests = append(normalizedConformanceTests, name)
+			}
+		}
+	}
+	s.GatewayConformanceTests = normalizedConformanceTests
+
 	if s.Image.Hub == "" {
 		s.Image.Hub = env.HUB.ValueOrDefault("registry.istio.io/testing")
 	}
@@ -233,6 +244,9 @@ func init() {
 	flag.BoolVar(&settingsFromCommandLine.GatewayConformanceStandardOnly, "istio.test.gatewayConformanceStandardOnly",
 		settingsFromCommandLine.GatewayConformanceStandardOnly,
 		"If set, only the standard gateway conformance tests will be run; tests relying on experimental resources will be skipped.")
+
+	flag.Var(&settingsFromCommandLine.GatewayConformanceTests, "istio.test.gatewayConformanceTests",
+		"If set, restricts the gateway conformance suite to the listed test ShortNames. May be repeated and/or specified as a comma-separated list.")
 
 	flag.BoolVar(&settingsFromCommandLine.OpenShift, "istio.test.openshift", settingsFromCommandLine.OpenShift,
 		"Indicate the tests run in an OpenShift platform rather than in plain Kubernetes.")
