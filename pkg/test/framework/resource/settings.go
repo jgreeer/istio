@@ -197,6 +197,11 @@ type Settings struct {
 	// GatewayConformanceAllowCRDsMismatch lets gateway conformance tests to run on environments with pre-installed gateway-api CRDs
 	GatewayConformanceAllowCRDsMismatch bool
 
+	// GatewayConformanceTests, if non-empty, restricts the gateway conformance suite to the
+	// listed test ShortNames. All other conformance tests will be skipped. The flag may be
+	// repeated and/or specified as a comma-separated list.
+	GatewayConformanceTests ArrayFlags
+
 	// OpenShift indicates the tests run in an OpenShift platform rather than in plain Kubernetes.
 	OpenShift bool
 
@@ -284,6 +289,7 @@ func (s *Settings) String() string {
 	result += fmt.Sprintf("IPFamilies:							 %v\n", s.IPFamilies)
 	result += fmt.Sprintf("GatewayConformanceStandardOnly: %v\n", s.GatewayConformanceStandardOnly)
 	result += fmt.Sprintf("GatewayConformanceAllowCRDsMismatch: %v\n", s.GatewayConformanceAllowCRDsMismatch)
+	result += fmt.Sprintf("GatewayConformanceTests: %v\n", s.GatewayConformanceTests)
 	return result
 }
 

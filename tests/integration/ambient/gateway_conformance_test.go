@@ -71,45 +71,6 @@ var conformanceNamespaces = []string{
 
 var skippedTests = map[string]string{
 	"BackendTLSPolicyConflictResolution": "https://github.com/istio/istio/issues/57817",
-
-	// The following tests were added in v1.5.0
-	"BackendTLSPolicyObservedGenerationBump": "TODO",
-
-	"GatewayBackendClientCertificateFeature":                     "TODO",
-	"GatewayFrontendInvalidDefaultClientCertificateValidation":   "TODO",
-	"GatewayInvalidTLSBackendConfiguration":                      "TODO",
-	"GatewayTLSBackendClientCertificate":                         "TODO",
-	"GatewayFrontendClientCertificateValidationInsecureFallback": "TODO",
-	"GatewayFrontendClientCertificateValidation":                 "TODO",
-	"GatewayInvalidFrontendClientCertificateValidation":          "TODO",
-
-	"HTTPRoute303Redirect":                            "TODO",
-	"HTTPRoute307Redirect":                            "TODO",
-	"HTTPRoute308Redirect":                            "TODO",
-	"HTTPRouteCORS":                                   "TODO",
-	"HTTPRouteHTTPSListenerDetectMisdirectedRequests": "TODO",
-
-	"ListenerSetAllowedNamespaceNone":        "TODO",
-	"ListenerSetAllowedNamespaceSame":        "TODO",
-	"ListenerSetAllowedNamespaceSelector":    "TODO",
-	"ListenerSetAllowedRoutesNamespaces":     "TODO",
-	"ListenerSetAllowedRoutesSupportedKinds": "TODO",
-	"ListenerSetDefaultNotAllowed":           "TODO",
-	"ListenerSetHostnameConflict":            "TODO",
-	"ListenerSetHTTPRouting":                 "TODO",
-	"ListenerSetProtocolConflict":            "TODO",
-	"ListenerSetReferenceGrant":              "TODO",
-
-	"MeshHTTPRoute303Redirect": "TODO",
-	"MeshHTTPRoute307Redirect": "TODO",
-	"MeshHTTPRoute308Redirect": "TODO",
-
-	// The following tests were modified between v1.4.0 && v1.5.0
-	"BackendTLSPolicy": "TODO",
-
-	"GatewayWithAttachedRoutesWithPort8080": "TODO",
-
-	"MeshGRPCRouteWeight": "TODO",
 }
 
 var agentgatewaySkippedTests = map[string]string{
@@ -156,6 +117,26 @@ func testConformance(gatewayClassName string, skippedTestKeys []string, t *testi
 		Run(func(ctx framework.TestContext) {
 			deleteConformanceNamespaces(t)
 			waitForConformanceNamespacesGone(t)
+
+			// If the user requested only a subset of conformance tests, skip every other one.
+			if only := ctx.Settings().GatewayConformanceTests; len(only) > 0 {
+				onlySet := k8ssets.New[string]()
+				for _, n := range only {
+					onlySet.Insert(n)
+				}
+				known := k8ssets.New[string]()
+				for _, ct := range tests.ConformanceTests {
+					known.Insert(ct.ShortName)
+					if !onlySet.Has(ct.ShortName) {
+						skippedTestKeys = append(skippedTestKeys, ct.ShortName)
+					}
+				}
+				for n := range onlySet {
+					if !known.Has(n) {
+						t.Fatalf("unknown gateway conformance test %q", n)
+					}
+				}
+			}
 
 			// Precreate the GatewayConformance namespaces, and apply the Image Pull Secret to them.
 			if ctx.Settings().Image.PullSecret != "" {
