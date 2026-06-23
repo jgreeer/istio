@@ -27,8 +27,6 @@ var skippedExtendedFeatures = []features.Feature{
 	features.GatewayFrontendClientCertificateValidationFeature,
 	// GatewayFrontendClientCertificateValidationInsecureFallback
 	features.GatewayFrontendClientCertificateValidationInsecureFallbackFeature,
-	// HTTPRouteHTTPSListenerDetectMisdirectedRequests
-	features.GatewayHTTPSListenerDetectMisdirectedRequestsFeature,
 	// ListenerSetHostnameConflict, ListenerSetProtocolConflict, ListenerSetReferenceGrant
 	features.ListenerSetFeature,
 }

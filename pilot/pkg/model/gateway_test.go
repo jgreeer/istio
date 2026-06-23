@@ -22,6 +22,7 @@ import (
 	"istio.io/istio/pkg/config"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/spiffe"
+	"istio.io/istio/pkg/test/util/assert"
 	"istio.io/istio/pkg/util/sets"
 )
 
@@ -624,4 +625,70 @@ func TestParseGatewayRDSRouteName(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestComputeMisdirectedHosts(t *testing.T) {
+	// server builds a minimal HTTPS-terminating server with the given sanitized hosts.
+	server := func(parent string, hosts ...string) (*networking.Server, string) {
+		return &networking.Server{
+			Port:  &networking.Port{Number: 443, Protocol: "HTTPS"},
+			Hosts: hosts,
+		}, parent
+	}
+	const parent = "ns/gw"
+
+	t.Run("conformance topology with catch-all listener", func(t *testing.T) {
+		// Mirrors the Gateway API HTTPRouteHTTPSListenerDetectMisdirectedRequests topology:
+		// a catch-all listener plus exact, wildcard, and nested-exact siblings on the same port.
+		catchAll, _ := server(parent, "*")
+		second, _ := server(parent, "ns/second-example.org")
+		wildcard, _ := server(parent, "ns/*.wildcard.org")
+		fourth, _ := server(parent, "ns/fourth-example.wildcard.org")
+		in := map[*networking.Server]string{
+			catchAll: parent,
+			second:   parent,
+			wildcard: parent,
+			fourth:   parent,
+		}
+		got := computeMisdirectedHosts(in)
+
+		// The catch-all listener serves everything not more-specifically matched, so all
+		// more-specific siblings must 421; no "*" (unmatched hosts fall through to 404).
+		assert.Equal(t, got[catchAll], []string{"*.wildcard.org", "fourth-example.wildcard.org", "second-example.org"})
+		// Exact listeners only need a single "*" (a catch-all sibling exists, so any non-own host
+		// is best-matched elsewhere).
+		assert.Equal(t, got[second], []string{"*"})
+		assert.Equal(t, got[fourth], []string{"*"})
+		// The wildcard listener also needs the nested-more-specific sibling enumerated, since
+		// Envoy's longest-domain match would otherwise route it to the wildcard's serving vhost.
+		assert.Equal(t, got[wildcard], []string{"*", "fourth-example.wildcard.org"})
+	})
+
+	t.Run("no catch-all enumerates siblings and never adds wildcard", func(t *testing.T) {
+		// Without a catch-all, a host matching no listener must 404, so we never emit "*".
+		a, _ := server(parent, "ns/a.com")
+		b, _ := server(parent, "ns/b.com")
+		wild, _ := server(parent, "ns/*.x.com")
+		in := map[*networking.Server]string{a: parent, b: parent, wild: parent}
+		got := computeMisdirectedHosts(in)
+		assert.Equal(t, got[a], []string{"*.x.com", "b.com"})
+		assert.Equal(t, got[b], []string{"*.x.com", "a.com"})
+		assert.Equal(t, got[wild], []string{"a.com", "b.com"})
+	})
+
+	t.Run("different parents and ports are not siblings", func(t *testing.T) {
+		// Servers on a different parent Gateway or port must not be treated as siblings.
+		a, _ := server("ns/gw-a", "ns/a.com")
+		b, _ := server("ns/gw-b", "ns/b.com")
+		in := map[*networking.Server]string{a: "ns/gw-a", b: "ns/gw-b"}
+		got := computeMisdirectedHosts(in)
+		// No siblings within either bucket -> no misdirected entries.
+		assert.Equal(t, len(got), 0)
+	})
+
+	t.Run("single listener has no misdirected hosts", func(t *testing.T) {
+		only, _ := server(parent, "ns/only.com")
+		got := computeMisdirectedHosts(map[*networking.Server]string{only: parent})
+		assert.Equal(t, len(got), 0)
+	})
 }

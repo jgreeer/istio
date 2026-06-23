@@ -173,6 +173,9 @@ func ListenerSetCollection(
 				meta[constants.InternalGatewaySemantics] = constants.GatewaySemanticsGateway
 				meta[model.InternalGatewayServiceAnnotation] = strings.Join(gatewayServices, ",")
 				meta[constants.InternalParentNamespace] = parentGwObj.Namespace
+				// Record the parent Kubernetes Gateway so sibling HTTPS listeners (across the parent
+				// Gateway and any ListenerSet) can be correlated for 421 Misdirected Request handling.
+				meta[constants.InternalGatewayParent] = parentGwObj.Namespace + "/" + parentGwObj.Name
 
 				// For unmanaged (manual deployment) parent Gateways, we have no idea what service accounts
 				// the gateway workloads will use, so we must not enforce service account restrictions.
@@ -319,6 +322,9 @@ func GatewayCollection(
 			meta[model.InternalGatewayServiceAnnotation] = strings.Join(gatewayServices, ",")
 
 			meta[constants.InternalServiceAccount] = serviceAccountName
+			// Record the parent Kubernetes Gateway so sibling HTTPS listeners (across the parent
+			// Gateway and any ListenerSet) can be correlated for 421 Misdirected Request handling.
+			meta[constants.InternalGatewayParent] = obj.Namespace + "/" + obj.Name
 
 			// Each listener generates an Istio Gateway with a single Server. This allows binding to a specific listener.
 			gatewayConfig := config.Config{

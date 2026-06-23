@@ -543,8 +543,20 @@ func (configgen *ConfigGeneratorImpl) buildGatewayHTTPRouteConfig(node *model.Pr
 		}
 	}
 
+	// Collect fallback hostnames that should return 421 Misdirected Request because they are
+	// best-matched by sibling HTTPS listeners on the same port. Per the Gateway API spec, an HTTPS
+	// request whose Host header would match a different listener (selected via SNI) must be rejected
+	// rather than processed by the current listener. A "*" entry rejects any host that does not match
+	// one of this route's serving virtual hosts.
+	misdirectedDomains := sets.New[string]()
+	for _, server := range servers {
+		for _, mh := range merged.MisdirectedHostsForServer[server] {
+			misdirectedDomains.Insert(strings.ToLower(mh))
+		}
+	}
+
 	var virtualHosts []*route.VirtualHost
-	if len(vHostDedupMap) == 0 {
+	if len(vHostDedupMap) == 0 && misdirectedDomains.Len() == 0 {
 		port := int(servers[0].Port.Number)
 		log.Warnf("constructed http route config for route %s on port %d with no vhosts; Setting up a default 404 vhost", routeName, port)
 		virtualHosts = []*route.VirtualHost{{
@@ -554,11 +566,32 @@ func (configgen *ConfigGeneratorImpl) buildGatewayHTTPRouteConfig(node *model.Pr
 			Routes: []*route.Route{},
 		}}
 	} else {
-		virtualHosts = make([]*route.VirtualHost, 0, len(vHostDedupMap))
+		virtualHosts = make([]*route.VirtualHost, 0, len(vHostDedupMap)+1)
 		vHostDedupMap = collapseDuplicateRoutes(vHostDedupMap)
 		for _, v := range vHostDedupMap {
 			v.Routes = istio_route.SortVHostRoutes(v.Routes)
 			virtualHosts = append(virtualHosts, v)
+		}
+		// Emit a single virtual host that direct-responds 421 for the sibling-listener hostnames.
+		// Envoy's domain matching (exact > longest wildcard > "*") ensures this only applies to hosts
+		// not served by a more specific virtual host above, matching Gateway API best-match semantics.
+		if misdirectedDomains.Len() > 0 {
+			port := int(servers[0].Port.Number)
+			virtualHosts = append(virtualHosts, &route.VirtualHost{
+				Name:    util.DomainName("misdirected", port),
+				Domains: sets.SortedList(misdirectedDomains),
+				Routes: []*route.Route{{
+					Match: &route.RouteMatch{
+						PathSpecifier: &route.RouteMatch_Prefix{Prefix: "/"},
+					},
+					Action: &route.Route_DirectResponse{
+						DirectResponse: &route.DirectResponseAction{
+							Status: 421,
+						},
+					},
+				}},
+				IncludeRequestAttemptCount: ph.IncludeRequestAttemptCount,
+			})
 		}
 	}
 

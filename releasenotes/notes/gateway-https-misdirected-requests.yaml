@@ -1,0 +1,9 @@
+apiVersion: release-notes/v2
+kind: feature
+area: traffic-management
+releaseNotes:
+  - |
+    Added support for detecting misdirected requests on HTTPS Gateway API listeners. When multiple
+    HTTPS listeners share a port, a request whose `Host` header is best-matched by a different
+    listener than the one selected via SNI now returns `421 Misdirected Request`, as required by the
+    Gateway API `HTTPRouteHTTPSListenerDetectMisdirectedRequests` conformance test.

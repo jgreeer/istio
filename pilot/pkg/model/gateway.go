@@ -85,6 +85,12 @@ type MergedGateway struct {
 	// TLSServerInfo maps from server to a corresponding TLS information like TLS Routename and SNIHosts.
 	TLSServerInfo map[*networking.Server]*TLSServerInfo
 
+	// MisdirectedHostsForServer maps from an HTTPS-terminating server to the list of sibling
+	// listener hostnames (sharing the same Kubernetes Gateway parent, port and bind) that should
+	// produce a 421 Misdirected Request response when received on this server. A "*" entry means
+	// "any host that does not match my own hostname(s)".
+	MisdirectedHostsForServer map[*networking.Server][]string
+
 	// ContainsAutoPassthroughGateways determines if there are any type AUTO_PASSTHROUGH Gateways, requiring additional
 	// clusters to be sent to the workload
 	ContainsAutoPassthroughGateways bool
@@ -187,6 +193,12 @@ func mergeGateways(gateways []gatewayWithInstances, proxy *Proxy, ps *PushContex
 	serversByRouteName := make(map[string][]*networking.Server)
 	tlsServerInfo := make(map[*networking.Server]*TLSServerInfo)
 	gatewayNameForServer := make(map[*networking.Server]string)
+	// misdirectedParentForServer records, for each HTTPS-terminating server originating from a
+	// Kubernetes Gateway listener (parent Gateway or any ListenerSet), the "<namespace>/<name>"
+	// key of the parent Kubernetes Gateway resource. Servers sharing the same parent (and the same
+	// port + bind) are sibling listeners selected via SNI, and feed the per-server
+	// MisdirectedHostsForServer computation below.
+	misdirectedParentForServer := make(map[*networking.Server]string)
 	verifiedCertificateReferences := sets.New[string]()
 	http3AdvertisingRoutes := sets.New[string]()
 	tlsHostsByPort := map[uint32]map[string]string{} // port -> host/bind map
@@ -214,6 +226,9 @@ func mergeGateways(gateways []gatewayWithInstances, proxy *Proxy, ps *PushContex
 			}
 			s := sanitizeServerHostNamespace(s, gatewayConfig.Namespace)
 			gatewayNameForServer[s] = gatewayName
+			if parent := gatewayConfig.Annotations[constants.InternalGatewayParent]; parent != "" && gateway.IsHTTPSServerWithTLSTermination(s) {
+				misdirectedParentForServer[s] = parent
+			}
 			log.Debugf("mergeGateways: gateway %q processing server %s :%v", gatewayName, s.Name, s.Hosts)
 
 			expectedSA := gatewayConfig.Annotations[constants.InternalServiceAccount]
@@ -448,6 +463,7 @@ func mergeGateways(gateways []gatewayWithInstances, proxy *Proxy, ps *PushContex
 		ServerPorts:                     serverPorts,
 		GatewayNameForServer:            gatewayNameForServer,
 		TLSServerInfo:                   tlsServerInfo,
+		MisdirectedHostsForServer:       computeMisdirectedHosts(misdirectedParentForServer),
 		ServersByRouteName:              serversByRouteName,
 		HTTP3AdvertisingRoutes:          http3AdvertisingRoutes,
 		ContainsAutoPassthroughGateways: autoPassthrough,
@@ -646,6 +662,118 @@ func ParseGatewayRDSRouteName(name string) (portNumber int, portName, gatewayNam
 		gatewayName = gwNs + "/" + gwName
 	}
 	return portNumber, portName, gatewayName
+}
+
+// computeMisdirectedHosts produces, for each HTTPS-terminating server originating from a
+// Kubernetes Gateway listener, the set of sibling listener hostnames on the same
+// (Kubernetes Gateway parent, port, bind) tuple that should produce a 421 Misdirected Request
+// response (per the Gateway API HTTPRouteHTTPSListenerDetectMisdirectedRequests semantics).
+//
+// The listener is selected at connection time via SNI; if the request's Host header is best-matched
+// (exact > longest wildcard > catch-all) by a *different* sibling listener, the request is
+// misdirected and must return 421. If it matches no listener at all it must return 404.
+//
+// To keep the generated configuration small, we delegate the best-match computation to Envoy's
+// virtual-host domain precedence (which is identical to Gateway API hostname specificity) instead
+// of enumerating every sibling on every server:
+//   - When a catch-all sibling exists, every Host that does not match this server's own hostname(s)
+//     is best-matched by some other listener, so a single "*" entry captures all of them. We only
+//     additionally enumerate siblings that are *nested within* one of this server's own wildcard
+//     hostnames, since Envoy's longest-domain match would otherwise route those to this server's own
+//     serving virtual host. This makes the common case O(1) extra config per server (O(N) total).
+//   - When no catch-all sibling exists (or this server is itself the catch-all), a Host matching no
+//     listener must 404, so a blanket "*" is unsafe. We enumerate the concrete sibling hostnames and
+//     let unmatched Hosts fall through to the default 404.
+func computeMisdirectedHosts(parentForServer map[*networking.Server]string) map[*networking.Server][]string {
+	if len(parentForServer) == 0 {
+		return nil
+	}
+	type bucketKey struct {
+		parent string
+		port   uint32
+		bind   string
+	}
+	type bucket struct {
+		hostnames sets.Set[string] // non-catch-all listener hostnames in this bucket
+		catchAll  bool             // at least one sibling listener has no hostname constraint
+	}
+	buckets := map[bucketKey]*bucket{}
+	// Pass 1: collect each server's hostname-set (namespace stripped) into its bucket.
+	for s, parent := range parentForServer {
+		k := bucketKey{parent: parent, port: s.Port.Number, bind: s.Bind}
+		b, ok := buckets[k]
+		if !ok {
+			b = &bucket{hostnames: sets.New[string]()}
+			buckets[k] = b
+		}
+		for _, h := range s.Hosts {
+			h = stripHostNamespace(h)
+			if h == "*" {
+				b.catchAll = true
+				continue
+			}
+			b.hostnames.Insert(h)
+		}
+	}
+	// Pass 2: per server, compute the sibling hostnames that should 421.
+	out := make(map[*networking.Server][]string, len(parentForServer))
+	for s, parent := range parentForServer {
+		k := bucketKey{parent: parent, port: s.Port.Number, bind: s.Bind}
+		b := buckets[k]
+		ownHostnames := sets.New[string]()
+		ownIsCatchAll := false
+		for _, h := range s.Hosts {
+			h = stripHostNamespace(h)
+			if h == "*" {
+				ownIsCatchAll = true
+				continue
+			}
+			ownHostnames.Insert(h)
+		}
+		allSiblings := b.hostnames.Difference(ownHostnames)
+		var misdirected sets.Set[string]
+		if b.catchAll && !ownIsCatchAll {
+			misdirected = sets.New[string]("*")
+			for h := range allSiblings {
+				if hostnameNestedWithin(h, ownHostnames) {
+					misdirected.Insert(h)
+				}
+			}
+		} else {
+			misdirected = allSiblings
+		}
+		if misdirected.Len() > 0 {
+			out[s] = sets.SortedList(misdirected)
+		}
+	}
+	return out
+}
+
+// stripHostNamespace removes a leading "<namespace>/" prefix from a server host entry, leaving the
+// bare hostname (or "*" for full wildcards). Server hosts arrive in the "<namespace>/<host>" form
+// after sanitizeServerHostNamespace; this strips the namespace for namespace-agnostic comparisons.
+func stripHostNamespace(h string) string {
+	if i := strings.Index(h, "/"); i >= 0 {
+		return h[i+1:]
+	}
+	return h
+}
+
+// hostnameNestedWithin reports whether hostname h is strictly more specific than, and nested within,
+// one of the given patterns. Gateway API hostnames are either exact or a single-label wildcard of the
+// form "*.suffix"; an exact pattern has nothing nested within it, while "*.suffix" covers any host
+// ending in ".suffix" with at least one additional label (including narrower "*.x.suffix" wildcards).
+func hostnameNestedWithin(h string, patterns sets.Set[string]) bool {
+	for p := range patterns {
+		if p == h || !strings.HasPrefix(p, "*.") {
+			continue
+		}
+		suffix := p[1:] // ".suffix"
+		if strings.HasSuffix(h, suffix) && len(h) > len(suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // convert ./host to currentNamespace/Host

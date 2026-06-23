@@ -72,8 +72,6 @@ var skippedTests = map[string]string{
 	"GatewayBackendClientCertificateFeature":                     "TODO",
 	"GatewayFrontendClientCertificateValidationInsecureFallback": "TODO",
 
-	"HTTPRouteHTTPSListenerDetectMisdirectedRequests": "TODO",
-
 	"ListenerSetHostnameConflict": "TODO",
 	"ListenerSetProtocolConflict": "TODO",
 	"ListenerSetReferenceGrant":   "TODO",
@@ -108,16 +106,18 @@ func TestGatewayConformance(t *testing.T) {
 			istioVersion, _ := env.ReadVersion()
 			supported := gateway.SupportedFeatures.Clone().Delete(gwfeatures.MeshConsumerRouteFeature)
 			opts := suite.ConformanceOptions{
-				Client:                   c,
-				ClientOptions:            clientOptions,
-				Clientset:                gatewayConformanceInputs.Client.Kube(),
-				RestConfig:               gatewayConformanceInputs.Client.RESTConfig(),
-				GatewayClassName:         "istio",
-				Debug:                    scopes.Framework.DebugEnabled(),
-				CleanupBaseResources:     gatewayConformanceInputs.Cleanup,
-				ManifestFS:               []fs.FS{&conformance.Manifests},
-				SupportedFeatures:        gwfeatures.SetsToNamesSet(supported),
-				SkipTests:                maps.Keys(skippedTests),
+				Client:               c,
+				ClientOptions:        clientOptions,
+				Clientset:            gatewayConformanceInputs.Client.Kube(),
+				RestConfig:           gatewayConformanceInputs.Client.RESTConfig(),
+				GatewayClassName:     "istio",
+				Debug:                scopes.Framework.DebugEnabled(),
+				CleanupBaseResources: gatewayConformanceInputs.Cleanup,
+				ManifestFS:           []fs.FS{&conformance.Manifests},
+				SupportedFeatures:    gwfeatures.SetsToNamesSet(supported),
+				SkipTests:            maps.Keys(skippedTests),
+				// RunTest allows scoping a run to a single conformance test, mostly for development/debugging.
+				RunTest:                  os.Getenv("GATEWAY_CONFORMANCE_RUN_TEST"),
 				UsableNetworkAddresses:   []v1.GatewaySpecAddress{{Value: "infra-backend-v1.gateway-conformance-infra.svc.cluster.local", Type: &hostnameType}},
 				UnusableNetworkAddresses: []v1.GatewaySpecAddress{{Value: "foo", Type: &hostnameType}},
 				ConformanceProfiles: k8ssets.New(
