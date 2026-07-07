@@ -66,12 +66,6 @@ var conformanceNamespaces = []string{
 }
 
 var skippedTests = map[string]string{
-	"BackendTLSPolicyConflictResolution": "https://github.com/istio/istio/issues/57817",
-}
-
-var agentgatewaySkippedTests = map[string]string{
-	"TLSRouteTerminateSimpleSameNamespace":  "TODO",
-	"TLSRouteMixedTerminationSameNamespace": "TODO",
 	// The following tests were added in v1.5.0
 
 	"GatewayBackendClientCertificateFeature":                     "TODO",
