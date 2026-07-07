@@ -17,8 +17,8 @@
 # Run the upstream Gateway API conformance suite against Istio in a local
 # kind cluster. A kind cluster is created (unless --skip-setup is supplied)
 # and MetalLB is installed to provide LoadBalancer addresses for Gateway
-# resources. The data plane mode (sidecar or ambient) is selectable via
-# --mode.
+# resources. The data plane mode (sidecar, ambient, or agentgateway) is
+# selectable via --mode.
 #
 # This script is a thin wrapper around prow/integ-suite-kind.sh: it sets the
 # correct integration target and TEST_SELECT/-run filters so that only the
@@ -31,7 +31,6 @@ WD=$(cd "$WD"; pwd)
 ROOT=$(dirname "$(dirname "$WD")")
 
 MODE="sidecar"
-AGENTGATEWAY="false"
 CLUSTER_NAME_DEFAULT="gwapi-conformance"
 NODE_IMAGE_DEFAULT="registry.istio.io/testing/kind-node:v1.35.0"
 
@@ -49,8 +48,11 @@ A kind cluster is created and MetalLB is installed automatically so that
 Gateway resources receive LoadBalancer addresses.
 
 Options:
-  --mode {sidecar|ambient}   Data plane mode under test (default: sidecar).
-  --agentgateway             Also run TestGatewayConformanceAgentgateway.
+  --mode {sidecar|ambient|agentgateway}
+                             Data plane mode under test (default: sidecar).
+                             'agentgateway' runs TestGatewayConformanceAgentgateway
+                             against the istio-agentgateway GatewayClass.
+  --agentgateway             Shorthand for --mode agentgateway.
   --tests <list>             Comma-separated list of conformance test ShortNames
                              to run (e.g. HTTPRouteSimpleSameNamespace).
                              May be repeated. All other conformance tests are
@@ -77,6 +79,9 @@ Examples:
   # Run the ambient conformance tests, keep the cluster around afterwards.
   $(basename "$0") --mode ambient --skip-cleanup
 
+  # Run the agentgateway conformance tests on a fresh kind cluster.
+  $(basename "$0") --mode agentgateway
+
   # Re-run against an already-prepared cluster + images.
   $(basename "$0") --mode ambient --skip-setup --skip-build
 
@@ -97,7 +102,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --agentgateway)
-      AGENTGATEWAY="true"
+      MODE="agentgateway"
       shift
       ;;
     --tests)
@@ -164,8 +169,15 @@ case "${MODE}" in
   ambient)
     INTEG_TARGET="test.integration.ambient.kube"
     ;;
+  agentgateway)
+    # TestGatewayConformanceAgentgateway lives in its own package with a
+    # dedicated TestMain that installs Istio with PILOT_ENABLE_AGENTGATEWAY=true.
+    # It is a distinct package from the sidecar pilot tests, so it needs its own
+    # integration target rather than sharing the pilot target.
+    INTEG_TARGET="test.integration.pilot.agentgateway.kube"
+    ;;
   *)
-    echo "Invalid --mode '${MODE}'. Must be 'sidecar' or 'ambient'." >&2
+    echo "Invalid --mode '${MODE}'. Must be 'sidecar', 'ambient', or 'agentgateway'." >&2
     exit 1
     ;;
 esac
@@ -179,8 +191,8 @@ esac
 # literal `$` inside the value as the start of a Make variable reference (so
 # `^TestGatewayConformance$ --foo` collapses to `^TestGatewayConformance--foo`
 # and matches no tests). Use `$$` here so make emits a single `$` to the shell.
-if [[ "${AGENTGATEWAY}" == "true" ]]; then
-  RUN_REGEX='^(TestGatewayConformance|TestGatewayConformanceAgentgateway)$$'
+if [[ "${MODE}" == "agentgateway" ]]; then
+  RUN_REGEX='^TestGatewayConformanceAgentgateway$$'
 else
   RUN_REGEX='^TestGatewayConformance$$'
 fi
@@ -198,6 +210,13 @@ export TEST_ENV=kind-metallb
 # avoids descending into sub-packages of pilot/ambient that would expand the
 # test set.
 export INTEGRATION_TEST_FLAGS="${INTEGRATION_TEST_FLAGS:-} -run=${RUN_REGEX}"
+
+# The agentgateway conformance test is gated behind an explicit opt-in flag
+# because agentgateway support is still experimental. Without this flag the test
+# skips itself (see ctx.Settings().Agentgateway).
+if [[ "${MODE}" == "agentgateway" ]]; then
+  INTEGRATION_TEST_FLAGS="${INTEGRATION_TEST_FLAGS} --istio.test.agentgateway"
+fi
 
 # Restrict the conformance suite to a user-specified subset, if any. Names are
 # the upstream ConformanceTest ShortName values.
@@ -218,7 +237,6 @@ fi
 
 echo "Running Gateway API conformance tests"
 echo "  mode:         ${MODE}"
-echo "  agentgateway: ${AGENTGATEWAY}"
 echo "  target:       ${INTEG_TARGET}"
 echo "  cluster:      ${CLUSTER_NAME}"
 echo "  node image:   ${NODE_IMAGE}"
