@@ -111,7 +111,7 @@ func buildListener(
 	}
 	if err != nil {
 		listenerConditions[string(gatewayv1.ListenerConditionResolvedRefs)].Error = &gatewaycommon.ListenerStatusConfigError{
-			Reason: err.Reason, Message: err.Message,
+			Reason: string(err.Reason), Message: err.Message,
 		}
 		listenerConditions[string(gatewayv1.GatewayConditionProgrammed)].Error = &gatewaycommon.ListenerStatusConfigError{
 			Reason: string(gatewayv1.GatewayReasonInvalid), Message: "Bad TLS configuration",
@@ -405,7 +405,7 @@ func resolveGatewayBackendTLS(
 	tlsRes, err := buildSecretReference(ctx, *backendTLS.ClientCertificateRef, gw, secrets)
 	if err != nil {
 		return &ConfigError{
-			Reason:  string(gatewayv1.GatewayReasonInvalidClientCertificateRef),
+			Reason:  ConfigErrorReason(gatewayv1.GatewayReasonInvalidClientCertificateRef),
 			Message: err.Message,
 		}
 	}
@@ -413,7 +413,7 @@ func resolveGatewayBackendTLS(
 	if tlsRes.Source.Namespace != namespace &&
 		!AgwSecretAllowed(grants, ctx, schematypes.GvkFromObject(gw), gvk.Secret, tlsRes.Source, namespace) {
 		return &ConfigError{
-			Reason: string(gatewayv1.GatewayReasonRefNotPermitted),
+			Reason: ConfigErrorReason(gatewayv1.GatewayReasonRefNotPermitted),
 			Message: fmt.Sprintf(
 				"clientCertificateRef %v/%v not accessible to a Gateway in namespace %q (missing a ReferenceGrant?)",
 				backendTLS.ClientCertificateRef.Name, tlsRes.Source.Namespace, namespace,

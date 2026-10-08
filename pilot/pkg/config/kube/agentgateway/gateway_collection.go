@@ -328,7 +328,7 @@ func listenerSetParentErr(err *Condition) *gatewaycommon.ListenerStatusConfigErr
 	if err == nil || err.error == nil {
 		return nil
 	}
-	return &gatewaycommon.ListenerStatusConfigError{Reason: err.error.Reason, Message: err.error.Message}
+	return &gatewaycommon.ListenerStatusConfigError{Reason: string(err.error.Reason), Message: err.error.Message}
 }
 
 // reportListenerSetWithConflicts sets the ListenerSet-level (top-level) Accepted and Programmed

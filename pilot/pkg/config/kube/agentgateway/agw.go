@@ -568,13 +568,17 @@ func buildAgwGRPCDestination(
 				return nil, nil, err
 			}
 		}
-		if dst != nil {
-			policies, err := BuildAgwGRPCBackendPolicies(ctx, ns, fwd.Filters)
-			if err != nil {
-				return nil, nil, err
-			}
-			dst.BackendPolicies = policies
+		if dst == nil {
+			// Defensive: invalid backendRefs yield a weight-preserving placeholder and every
+			// other failure returns above, so a nil here would be a bug. Never append nil,
+			// which would marshal as an empty backend on the wire.
+			continue
 		}
+		policies, policyErr := BuildAgwGRPCBackendPolicies(ctx, ns, fwd.Filters)
+		if policyErr != nil {
+			return nil, nil, policyErr
+		}
+		dst.BackendPolicies = policies
 		res = append(res, dst)
 	}
 	return res, invalidBackendErr, nil

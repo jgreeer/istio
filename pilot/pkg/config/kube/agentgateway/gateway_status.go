@@ -128,7 +128,7 @@ func reportGatewayStatus(
 		accepted := gatewayConditions[string(gatewayv1.GatewayConditionAccepted)]
 		if validListeners == 0 {
 			accepted.error = &ConfigError{
-				Reason:  string(gatewayv1.GatewayReasonListenersNotValid),
+				Reason:  ConfigErrorReason(gatewayv1.GatewayReasonListenersNotValid),
 				Message: "None of the Gateway's listeners are valid",
 			}
 		} else {
@@ -244,7 +244,7 @@ func agentgatewayListenerStatusCondition(c *Condition) *gatewaycommon.ListenerSt
 		SetOnce: c.setOnce,
 	}
 	if c.error != nil {
-		out.Error = &gatewaycommon.ListenerStatusConfigError{Reason: c.error.Reason, Message: c.error.Message}
+		out.Error = &gatewaycommon.ListenerStatusConfigError{Reason: string(c.error.Reason), Message: c.error.Message}
 	}
 	return out
 }
@@ -258,7 +258,7 @@ func applyAgentgatewayConditionFromListenerStatus(c *Condition, u *gatewaycommon
 	c.status = u.Status
 	c.setOnce = u.SetOnce
 	if u.Error != nil {
-		c.error = &ConfigError{Reason: u.Error.Reason, Message: u.Error.Message}
+		c.error = &ConfigError{Reason: ConfigErrorReason(u.Error.Reason), Message: u.Error.Message}
 	} else {
 		c.error = nil
 	}

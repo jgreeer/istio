@@ -118,7 +118,7 @@ func translateBackendTLSPolicy(
 	caCert, err := getBackendTLSCACert(krtctx, inputs.ConfigMaps, btls, conds)
 	if err != nil {
 		conds[string(gatewayv1.PolicyConditionAccepted)].error = &ConfigError{
-			Reason:  string(gatewayv1.BackendTLSPolicyReasonNoValidCACertificate),
+			Reason:  ConfigErrorReason(gatewayv1.BackendTLSPolicyReasonNoValidCACertificate),
 			Message: err.Error(),
 		}
 		caCert = dummyCaCert
@@ -152,7 +152,7 @@ func translateBackendTLSPolicy(
 		allPoliciesForTarget := backendTLSTargetIndex.Fetch(krtctx, tgtKey)
 		if err := btlsCheckConflicted(btls, target, allPoliciesForTarget); err != nil {
 			conds[string(gatewayv1.PolicyConditionAccepted)].error = &ConfigError{
-				Reason:  string(gatewayv1.PolicyReasonConflicted),
+				Reason:  ConfigErrorReason(gatewayv1.PolicyReasonConflicted),
 				Message: err.Error(),
 			}
 			continue
@@ -305,7 +305,7 @@ func getBackendTLSCACert(
 			return nil, nil
 		default:
 			conds[string(gatewayv1.PolicyConditionAccepted)].error = &ConfigError{
-				Reason:  string(gatewayv1.PolicyReasonInvalid),
+				Reason:  ConfigErrorReason(gatewayv1.PolicyReasonInvalid),
 				Message: fmt.Sprintf("Unknown wellKnownCACertificates: %v", *wk),
 			}
 			return nil, fmt.Errorf("unknown wellKnownCACertificates: %v", *wk)
@@ -320,7 +320,7 @@ func getBackendTLSCACert(
 	for _, ref := range validation.CACertificateRefs {
 		if ref.Group != "" || ref.Kind != "ConfigMap" {
 			conds[string(gatewayv1.BackendTLSPolicyConditionResolvedRefs)].error = &ConfigError{
-				Reason:  string(gatewayv1.BackendTLSPolicyReasonInvalidKind),
+				Reason:  ConfigErrorReason(gatewayv1.BackendTLSPolicyReasonInvalidKind),
 				Message: "Certificate reference invalid: " + string(ref.Kind),
 			}
 			return nil, fmt.Errorf("invalid certificate reference kind: %v", ref.Kind)
@@ -332,7 +332,7 @@ func getBackendTLSCACert(
 		cfgmap := krt.FetchOne(krtctx, cfgmaps, krt.FilterObjectName(nn))
 		if cfgmap == nil {
 			conds[string(gatewayv1.BackendTLSPolicyConditionResolvedRefs)].error = &ConfigError{
-				Reason:  string(gatewayv1.BackendTLSPolicyReasonInvalidCACertificateRef),
+				Reason:  ConfigErrorReason(gatewayv1.BackendTLSPolicyReasonInvalidCACertificateRef),
 				Message: "Certificate reference not found",
 			}
 			return nil, fmt.Errorf("certificate reference not found: %v", nn)
@@ -341,7 +341,7 @@ func getBackendTLSCACert(
 		caCert, ok := cm.Data["ca.crt"]
 		if !ok || caCert == "" {
 			conds[string(gatewayv1.BackendTLSPolicyConditionResolvedRefs)].error = &ConfigError{
-				Reason:  string(gatewayv1.BackendTLSPolicyReasonInvalidCACertificateRef),
+				Reason:  ConfigErrorReason(gatewayv1.BackendTLSPolicyReasonInvalidCACertificateRef),
 				Message: "ConfigMap missing ca.crt key or empty ca.crt key",
 			}
 			return nil, fmt.Errorf("ConfigMap %v missing or empty ca.crt key", nn)
@@ -423,7 +423,7 @@ func btlsSetAncestorStatus(
 				Status:             metav1.ConditionFalse,
 				ObservedGeneration: generation,
 				LastTransitionTime: metav1.Now(),
-				Reason:             c.error.Reason,
+				Reason:             string(c.error.Reason),
 				Message:            c.error.Message,
 			})
 		} else {

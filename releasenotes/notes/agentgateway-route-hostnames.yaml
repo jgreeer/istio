@@ -1,0 +1,14 @@
+apiVersion: release-notes/v2
+kind: bug-fix
+area: traffic-management
+
+releaseNotes:
+  - |
+    **Fixed** an issue where an `HTTPRoute`, `GRPCRoute` or `TLSRoute` attached to an agentgateway `Gateway`
+    was programmed without its hostnames when one of its `backendRef`s could not be resolved. Because a route
+    with no hostnames matches every hostname, a single unresolvable `backendRef` caused requests for
+    *any* unmatched host on that gateway to return `500` instead of `404`.
+  - |
+    **Fixed** invalid `backendRef`s on agentgateway routes not being gracefully dropped. `RefNotPermitted`,
+    `BackendNotFound` and `InvalidKind` backend references were incorrectly promoted to fatal translation
+    errors, which dropped all backends of the route rule instead of only the invalid ones.

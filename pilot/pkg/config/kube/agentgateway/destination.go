@@ -46,17 +46,27 @@ func buildAgwDestination(
 	k config.GroupVersionKind,
 ) (*api.RouteBackend, *Condition) {
 	ref := normalizeReference(to.Group, to.Kind, gvk.Service)
+	weight := int32(1) // default
+	if to.Weight != nil {
+		weight = *to.Weight
+	}
+	// invalidBackend builds a placeholder backend that carries the weight but resolves to nothing.
+	// The Gateway API requires the share of traffic destined for an invalid backendRef to receive a
+	// 500 rather than being redistributed to the healthy backends, so the weight must be preserved.
+	invalidBackend := func(reason ConfigErrorReason, msg string) (*api.RouteBackend, *Condition) {
+		log.Debug(msg)
+		return &api.RouteBackend{Weight: weight}, &Condition{
+			error: &ConfigError{
+				Reason:  reason,
+				Message: msg,
+			},
+		}
+	}
 	// check if the reference is allowed
 	if toNs := to.Namespace; toNs != nil && string(*toNs) != ns {
 		if !ctx.Grants.BackendAllowed(ctx.Krt, k, ref, to.Name, *toNs, ns) {
 			msg := fmt.Sprintf("backendRef %v/%v not accessible to a %s in namespace %q (missing a ReferenceGrant?)", to.Name, *toNs, k.Kind, ns)
-			log.Debug(msg)
-			return nil, &Condition{
-				error: &ConfigError{
-					Reason:  ConfigErrorReason(gatewayv1.RouteReasonRefNotPermitted),
-					Message: msg,
-				},
-			}
+			return invalidBackend(InvalidDestinationPermit, msg)
 		}
 	}
 
@@ -66,10 +76,6 @@ func buildAgwDestination(
 	}
 	var invalidBackendErr *Condition
 	var hostname string
-	weight := int32(1) // default
-	if to.Weight != nil {
-		weight = *to.Weight
-	}
 	rb := &api.RouteBackend{
 		Weight: weight,
 	}
@@ -197,14 +203,8 @@ func buildAgwDestination(
 			Port: uint32(*port), //nolint:gosec // G115: Gateway API PortNumber is int32 with validation 1-65535, always safe
 		}
 	default:
-		msg := fmt.Sprintf("unsupported backendRef kind %q with group %q", ptr.OrEmpty(to.Group), ptr.OrEmpty(to.Kind))
-		log.Debug(msg)
-		return nil, &Condition{
-			error: &ConfigError{
-				Reason:  ConfigErrorReason(gatewayv1.RouteReasonInvalidKind),
-				Message: fmt.Sprintf("referencing unsupported backendRef: group %q kind %q", ptr.OrEmpty(to.Group), ptr.OrEmpty(to.Kind)),
-			},
-		}
+		msg := fmt.Sprintf("referencing unsupported backendRef: group %q kind %q", ptr.OrEmpty(to.Group), ptr.OrEmpty(to.Kind))
+		return invalidBackend(InvalidDestinationKind, msg)
 	}
 	return rb, invalidBackendErr
 }
@@ -232,13 +232,17 @@ func buildAgwHTTPDestination(
 				return nil, nil, err
 			}
 		}
-		if dst != nil {
-			policies, err := BuildAgwBackendPolicyFilters(ctx, ns, fwd.Filters)
-			if err != nil {
-				return nil, nil, err
-			}
-			dst.BackendPolicies = policies
+		if dst == nil {
+			// Defensive: invalid backendRefs yield a weight-preserving placeholder and every
+			// other failure returns above, so a nil here would be a bug. Never append nil,
+			// which would marshal as an empty backend on the wire.
+			continue
 		}
+		policies, policyErr := BuildAgwBackendPolicyFilters(ctx, ns, fwd.Filters)
+		if policyErr != nil {
+			return nil, nil, policyErr
+		}
+		dst.BackendPolicies = policies
 		res = append(res, dst)
 	}
 	return res, invalidBackendErr, nil
@@ -269,6 +273,12 @@ func buildAgwTCPDestination(
 			} else {
 				return nil, nil, err
 			}
+		}
+		if dst == nil {
+			// Defensive: invalid backendRefs yield a weight-preserving placeholder and every
+			// other failure returns above, so a nil here would be a bug. Never append nil,
+			// which would marshal as an empty backend on the wire.
+			continue
 		}
 		res = append(res, dst)
 	}
@@ -301,6 +311,12 @@ func buildAgwTLSDestination(
 				return nil, nil, err
 			}
 		}
+		if dst == nil {
+			// Defensive: invalid backendRefs yield a weight-preserving placeholder and every
+			// other failure returns above, so a nil here would be a bug. Never append nil,
+			// which would marshal as an empty backend on the wire.
+			continue
+		}
 		res = append(res, dst)
 	}
 	return res, invalidBackendErr, nil
@@ -308,7 +324,10 @@ func buildAgwTLSDestination(
 
 // https://github.com/kubernetes-sigs/gateway-api/blob/cea484e38e078a2c1997d8c7a62f410a1540f519/apis/v1beta1/httproute_types.go#L207-L212
 func isInvalidBackend(err *Condition) bool {
-	return err.reason == ConfigErrorReason(gatewayv1.RouteReasonRefNotPermitted) ||
-		err.reason == ConfigErrorReason(gatewayv1.RouteReasonBackendNotFound) ||
-		err.reason == ConfigErrorReason(gatewayv1.RouteReasonInvalidKind)
+	if err == nil || err.error == nil {
+		return false
+	}
+	return err.error.Reason == InvalidDestinationPermit ||
+		err.error.Reason == InvalidDestinationNotFound ||
+		err.error.Reason == InvalidDestinationKind
 }

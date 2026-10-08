@@ -229,6 +229,10 @@ func ConvertHTTPRouteToAgw(ctx RouteContext, r gatewayv1.HTTPRouteRule,
 		}
 	}
 
+	// Set the hostnames before any error return; a route published with no hostnames matches
+	// every hostname, which would turn a broken route into a gateway-wide catch-all.
+	res.Hostnames = convertHostnames(obj.Spec.Hostnames)
+
 	backends, backendErr, err := buildAgwHTTPDestination(ctx, r.BackendRefs, obj.Namespace)
 	if err != nil {
 		// Still attach the route (with no backends) so the data plane returns 5xx
@@ -237,8 +241,6 @@ func ConvertHTTPRouteToAgw(ctx RouteContext, r gatewayv1.HTTPRouteRule,
 		return res, err
 	}
 	res.Backends = backends
-
-	res.Hostnames = convertHostnames(obj.Spec.Hostnames)
 
 	if policiesErr != nil && !isPolicyErrorCritical(policiesErr) {
 		return nil, policiesErr
@@ -303,6 +305,11 @@ func ConvertGRPCRouteToAgw(ctx RouteContext, r gatewayv1.GRPCRouteRule,
 	}
 	res.TrafficPolicies = policies
 
+	// Set the hostnames before any error return; see ConvertHTTPRouteToAgw.
+	res.Hostnames = slices.Map(obj.Spec.Hostnames, func(e gatewayv1.Hostname) string {
+		return string(e)
+	})
+
 	route, backendErr, err := buildAgwGRPCDestination(ctx, r.BackendRefs, obj.Namespace)
 	if err != nil {
 		log.Errorf("failed to translate grpc destination", "err", err, "route_name", obj.Name, "route_ns", obj.Namespace)
@@ -310,9 +317,6 @@ func ConvertGRPCRouteToAgw(ctx RouteContext, r gatewayv1.GRPCRouteRule,
 		return res, err
 	}
 	res.Backends = route
-	res.Hostnames = slices.Map(obj.Spec.Hostnames, func(e gatewayv1.Hostname) string {
-		return string(e)
-	})
 	return res, backendErr
 }
 
@@ -350,6 +354,12 @@ func ConvertTLSRouteToAgw(ctx RouteContext, r gatewayv1.TLSRouteRule,
 		ListenerKey: "",
 	}
 
+	// TLS Routes have hostnames in the spec (unlike TCP Routes). Set them before any error
+	// return; see ConvertHTTPRouteToAgw.
+	res.Hostnames = slices.Map(obj.Spec.Hostnames, func(e gatewayv1.Hostname) string {
+		return string(e)
+	})
+
 	// Build TLS destinations
 	route, backendErr, err := buildAgwTLSDestination(ctx, r.BackendRefs, obj.Namespace)
 	if err != nil {
@@ -358,11 +368,6 @@ func ConvertTLSRouteToAgw(ctx RouteContext, r gatewayv1.TLSRouteRule,
 		return res, err
 	}
 	res.Backends = route
-
-	// TLS Routes have hostnames in the spec (unlike TCP Routes)
-	res.Hostnames = slices.Map(obj.Spec.Hostnames, func(e gatewayv1.Hostname) string {
-		return string(e)
-	})
 
 	return res, backendErr
 }

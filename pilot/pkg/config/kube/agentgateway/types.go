@@ -82,7 +82,9 @@ type AgwParentInfo struct {
 }
 
 // ConfigErrorReason represents a reason for a configuration error.
-type ConfigErrorReason = string
+// This is deliberately a defined type rather than an alias for string, so that comparing it
+// against Condition's plain-string success `reason` field fails to compile.
+type ConfigErrorReason string
 
 const (
 	// InvalidDestination indicates an issue with the destination
